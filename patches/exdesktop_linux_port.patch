@@ -1,0 +1,175 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 59477e2..7ca5a7a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -50,8 +50,10 @@ include(cmake/target_link_frameworks.cmake)
+ include(cmake/target_link_options_if_exists.cmake)
+ include(cmake/init_target.cmake)
+ include(cmake/generate_target.cmake)
+-include(cmake/nuget.cmake)
+-include(cmake/validate_d3d_compiler.cmake)
++if (WIN32)
++    include(cmake/nuget.cmake)
++    include(cmake/validate_d3d_compiler.cmake)
++endif()
+ include(cmake/target_prepare_qrc.cmake)
+ 
+ include(cmake/options.cmake)
+diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
+index 4da5e96..ec2ddea 100644
+--- a/Telegram/CMakeLists.txt
++++ b/Telegram/CMakeLists.txt
+@@ -2775,18 +2775,13 @@ if (WIN32)
+         COMMAND ${CMAKE_COMMAND} -E copy_directory ${libs_loc}/python311/embed $<TARGET_FILE_DIR:Telegram>/python
+         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/SourceFiles/extera/python $<TARGET_FILE_DIR:Telegram>/python/extera
+     )
+-elseif (APPLE)
+-    find_package(Python3 COMPONENTS Development)
+-    if (Python3_FOUND)
+-        target_include_directories(Telegram PRIVATE ${Python3_INCLUDE_DIRS})
+-        target_link_libraries(Telegram PRIVATE ${Python3_LIBRARIES})
+-        add_custom_command(TARGET Telegram POST_BUILD
+-            COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/SourceFiles/extera/python $<TARGET_FILE_DIR:Telegram>/python/extera
+-        )
+-    else()
+-        message(WARNING "Python3 development libraries not found: plugin support (extera_plugins) will be disabled on this build")
+-        set_source_files_properties(SourceFiles/extera/extera_plugins.cpp PROPERTIES HEADER_FILE_ONLY TRUE)
+-    endif()
++else()
++    find_package(Python3 COMPONENTS Development REQUIRED)
++    target_include_directories(Telegram PRIVATE ${Python3_INCLUDE_DIRS})
++    target_link_libraries(Telegram PRIVATE ${Python3_LIBRARIES})
++    add_custom_command(TARGET Telegram POST_BUILD
++        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/SourceFiles/extera/python $<TARGET_FILE_DIR:Telegram>/python/extera
++    )
+ endif()
+ 
+ if (MSVC)
+diff --git a/Telegram/SourceFiles/extera/extera_plugins.cpp b/Telegram/SourceFiles/extera/extera_plugins.cpp
+index 92bb1d5..5a7f018 100644
+--- a/Telegram/SourceFiles/extera/extera_plugins.cpp
++++ b/Telegram/SourceFiles/extera/extera_plugins.cpp
+@@ -34,6 +34,7 @@
+ 
+ #include <QtCore/QDir>
+ #include <QtCore/QFile>
++#include <QtCore/QStandardPaths>
+ 
+ #ifdef Q_OS_WIN
+ #include <windows.h>
+@@ -78,11 +79,41 @@ private:
+ };
+ 
+ [[nodiscard]] QString RuntimePath() {
++#ifdef Q_OS_WIN
++	return cExeDir() + u"python/"_q;
++#elif defined(Q_OS_MAC)
+ 	return cExeDir() + u"python/"_q;
++#else
++	// Linux / generic Unix: check local candidates where extera_host.py might reside
++	const auto localToExe = cExeDir() + u"python/"_q;
++	if (QFile::exists(localToExe + u"extera/extera_host.py"_q)) {
++		return localToExe;
++	}
++	const auto appData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + u"/python/"_q;
++	if (QFile::exists(appData + u"extera/extera_host.py"_q)) {
++		return appData;
++	}
++	const auto localShare = QDir::homePath() + u"/.local/share/exDesktop/python/"_q;
++	if (QFile::exists(localShare + u"extera/extera_host.py"_q)) {
++		return localShare;
++	}
++	const auto systemShare = u"/usr/share/exDesktop/python/"_q;
++	if (QFile::exists(systemShare + u"extera/extera_host.py"_q)) {
++		return systemShare;
++	}
++	return QFile::exists(localToExe) ? localToExe : appData;
++#endif
+ }
+ 
+ [[nodiscard]] QString DataPath() {
++#ifdef Q_OS_WIN
++	return cWorkingDir() + u"tdata/plugins/"_q;
++#else
++	if (cWorkingDir().isEmpty()) {
++		return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + u"/plugins/"_q;
++	}
+ 	return cWorkingDir() + u"tdata/plugins/"_q;
++#endif
+ }
+ 
+ [[nodiscard]] QString StartMarkerPath() {
+@@ -409,7 +440,11 @@ PyObject *InitNativeModule() {
+ 
+ [[nodiscard]] bool InitInterpreter(const QString &runtime) {
+ 	auto config = PyConfig();
++#ifdef Q_OS_WIN
+ 	PyConfig_InitIsolatedConfig(&config);
++#else
++	PyConfig_InitPythonConfig(&config);
++#endif
+ 	const auto finish = [&](PyStatus status) {
+ 		if (PyStatus_Exception(status)) {
+ 			Instance().error = QString::fromUtf8(status.err_msg
+@@ -420,6 +455,7 @@ PyObject *InitNativeModule() {
+ 		}
+ 		return true;
+ 	};
++#ifdef Q_OS_WIN
+ 	const auto home = QDir::toNativeSeparators(runtime).toStdWString();
+ 	if (!finish(PyConfig_SetString(&config, &config.home, home.c_str()))) {
+ 		return false;
+@@ -439,12 +475,37 @@ PyObject *InitNativeModule() {
+ 			return false;
+ 		}
+ 	}
++#endif
+ 	config.write_bytecode = 0;
+ 	config.install_signal_handlers = 0;
+ 	if (!finish(Py_InitializeFromConfig(&config))) {
+ 		return false;
+ 	}
+ 	PyConfig_Clear(&config);
++
++#ifndef Q_OS_WIN
++	// Add runtime and extera directories to sys.path so modules can be imported
++	PyObject *sysPath = PySys_GetObject("path");
++	if (sysPath && PyList_Check(sysPath)) {
++		const auto extraPaths = QStringList{
++			runtime + u"extera"_q,
++			runtime,
++			runtime + u"site-packages"_q,
++			DataPath() + u"plugins"_q,
++			QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + u"/python/extera"_q,
++			QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + u"/python"_q,
++		};
++		for (auto it = extraPaths.rbegin(); it != extraPaths.rend(); ++it) {
++			const auto &path = *it;
++			const auto uPath = QDir::toNativeSeparators(path).toUtf8();
++			if (PyObject *pPath = PyUnicode_FromString(uPath.constData())) {
++				PyList_Insert(sysPath, 0, pPath);
++				Py_DECREF(pPath);
++			}
++		}
++	}
++#endif
++
+ 	return true;
+ }
+ 
+diff --git a/Telegram/build/qt_version.py b/Telegram/build/qt_version.py
+index 24c81dc..d09e4d9 100644
+--- a/Telegram/build/qt_version.py
++++ b/Telegram/build/qt_version.py
+@@ -10,4 +10,11 @@ def resolve(arch):
+         else:
+             print('Choosing Qt 6.')
+             os.environ['QT'] = '6.11.2'
++    else:
++        if 'qt5' in sys.argv:
++            print('Choosing Qt 5.')
++            os.environ['QT'] = '5.15.19'
++        else:
++            print('Choosing Qt 6.')
++            os.environ['QT'] = '6.11.2'
+     return True
