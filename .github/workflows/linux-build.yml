@@ -104,12 +104,13 @@ jobs:
         run: |
           python3 -m pip install jinja2
           cd Telegram/build/docker/centos_env
-          python3 gen_dockerfile.py > Dockerfile
+          python3 gen_dockerfile.py > Dockerfile.rendered
 
       - name: Build and Cache Docker image
         uses: docker/build-push-action@v6
         with:
           context: Telegram/build/docker/centos_env
+          file: Telegram/build/docker/centos_env/Dockerfile.rendered
           load: true
           tags: tdesktop:centos_env
           cache-from: type=local,src=/tmp/.buildx-cache
@@ -148,9 +149,8 @@ jobs:
             cp out/Release/root/Updater "${RELEASE_DIR}/"
           fi
           
-          # Copy python host and base plugin assets
-          cp Telegram/SourceFiles/extera/python/base_plugin.py "${RELEASE_DIR}/python/extera/"
-          cp Telegram/SourceFiles/extera/python/extera_host.py "${RELEASE_DIR}/python/extera/"
+          # Copy full python plugin runtime
+          cp -r Telegram/SourceFiles/extera/python/* "${RELEASE_DIR}/python/extera/"
           
           chmod +x "${RELEASE_DIR}/Telegram"
           
