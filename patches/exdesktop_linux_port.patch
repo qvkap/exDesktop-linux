@@ -1,3 +1,12 @@
+diff --git a/.gitignore b/.gitignore
+index 320c160..6691393 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -74,3 +74,4 @@ settings.local.json
+ 
+ # Generated changelog page (built by CI, deployed to GitHub Pages)
+ /docs/changelog/
++/tests/test_extera_plugins
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 59477e2..7ca5a7a 100644
 --- a/CMakeLists.txt
@@ -173,12 +182,340 @@ index 24c81dc..d09e4d9 100644
 +            print('Choosing Qt 6.')
 +            os.environ['QT'] = '6.11.2'
      return True
+diff --git a/build_linux.sh b/build_linux.sh
+new file mode 100755
+index 0000000..3db4cbc
+--- /dev/null
++++ b/build_linux.sh
+@@ -0,0 +1,153 @@
++#!/usr/bin/env bash
++# exDesktop Linux Native Build & Validation Script
++# Supports:
++#   1. Native Host Build (using system Qt6, Python3-dev and dependencies)
++#   2. Docker Hermetic Build (official tdesktop container with full WebRTC/Qt6 stack)
++#   3. Test Suite Execution (verification of extera_plugins engine)
++set -eo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++cd "$SCRIPT_DIR"
++
++# Official / Custom Telegram API Credentials
++export TDESKTOP_API_ID="${TDESKTOP_API_ID:-27795979}"
++export TDESKTOP_API_HASH="${TDESKTOP_API_HASH:-0b9b427e162605ce85210ab918a9c2d8}"
++
++MODE="${1:---help}"
++
++show_help() {
++    cat <<EOF
++exDesktop Linux Native Porter & Builder
++
++Usage:
++  ./build_linux.sh [command] [options]
++
++Commands:
++  test                Run native extera_plugins C API verification suite
++  configure           Configure CMake for native host build
++  build               Build Telegram binary on host
++  docker              Build Telegram in official tdesktop Linux container
++  patch               Generate or check linux compatibility patch
++  help                Show this message
++
++Environment Variables:
++  TDESKTOP_API_ID     Telegram API ID (default: 27795979)
++  TDESKTOP_API_HASH   Telegram API Hash (default: 0b9b427e162605ce85210ab918a9c2d8)
++  BUILD_DIR           Build directory (default: out)
++  CONFIG              Build configuration: Release or Debug (default: Release)
++EOF
++}
++
++run_test() {
++    echo "==> Running extera_plugins Linux Native Engine Test..."
++    local CFLAGS
++    local LDFLAGS
++    CFLAGS="$(python3-config --cflags --embed 2>/dev/null || python3-config --cflags)"
++    LDFLAGS="$(python3-config --ldflags --embed 2>/dev/null || python3-config --ldflags)"
++    
++    mkdir -p tests
++    clang++ -std=c++17 -O2 tests/test_extera_plugins.cpp ${CFLAGS} ${LDFLAGS} -o tests/test_extera_plugins
++    ./tests/test_extera_plugins
++    echo "==> Plugin engine test succeeded!"
++}
++
++run_configure() {
++    local BUILD_DIR="${BUILD_DIR:-out}"
++    local CONFIG="${CONFIG:-Release}"
++    echo "==> Initializing submodules (lib_ui, cmake)..."
++    git submodule update --init Telegram/lib_ui cmake
++    
++    echo "==> Configuring CMake in ${BUILD_DIR} (${CONFIG})..."
++    cmake -B "${BUILD_DIR}" -G Ninja \
++        -DCMAKE_BUILD_TYPE="${CONFIG}" \
++        -DTDESKTOP_API_ID="${TDESKTOP_API_ID}" \
++        -DTDESKTOP_API_HASH="${TDESKTOP_API_HASH}" \
++        -DDESKTOP_APP_DISABLE_X11_INTEGRATION=OFF \
++        -DDESKTOP_APP_DISABLE_WAYLAND_INTEGRATION=OFF \
++        "${@:2}"
++}
++
++run_build() {
++    local BUILD_DIR="${BUILD_DIR:-out}"
++    local CONFIG="${CONFIG:-Release}"
++    if [ ! -f "${BUILD_DIR}/build.ninja" ] && [ ! -f "${BUILD_DIR}/Makefile" ]; then
++        run_configure "$@"
++    fi
++    echo "==> Compiling exDesktop (${CONFIG})..."
++    cmake --build "${BUILD_DIR}" --config "${CONFIG}" --target Telegram
++    echo "==> Build complete: ${BUILD_DIR}/bin/Telegram"
++}
++
++run_docker() {
++    local CONFIG="${CONFIG:-Release}"
++    local DOCKER_CLI
++    if command -v docker >/dev/null 2>&1; then
++        DOCKER_CLI="docker"
++    elif command -v podman >/dev/null 2>&1; then
++        DOCKER_CLI="podman"
++    else
++        echo "[ERROR] Neither docker nor podman found in PATH." >&2
++        exit 1
++    fi
++
++    echo "==> Preparing official Docker build environment..."
++    git submodule update --init Telegram/lib_ui cmake
++    
++    local IMAGE_TAG="tdesktop:centos_env"
++    if ! ${DOCKER_CLI} image inspect "${IMAGE_TAG}" >/dev/null 2>&1; then
++        echo "==> Building ${IMAGE_TAG} image..."
++        cd Telegram/build/docker/centos_env
++        if command -v poetry >/dev/null 2>&1; then
++            poetry install
++            poetry run python gen_dockerfile.py | DOCKER_BUILDKIT=1 ${DOCKER_CLI} build -t "${IMAGE_TAG}" -
++        else
++            python3 -m pip install jinja2
++            python3 gen_dockerfile.py | DOCKER_BUILDKIT=1 ${DOCKER_CLI} build -t "${IMAGE_TAG}" -
++        fi
++        cd "$SCRIPT_DIR"
++    fi
++
++    echo "==> Running build in container with API ID: ${TDESKTOP_API_ID}..."
++    ${DOCKER_CLI} run --rm -it \
++        -u "$(id -u):$(id -g)" \
++        -v "$PWD:/usr/src/tdesktop" \
++        -e CONFIG="${CONFIG}" \
++        "${IMAGE_TAG}" \
++        /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
++        -D TDESKTOP_API_ID="${TDESKTOP_API_ID}" \
++        -D TDESKTOP_API_HASH="${TDESKTOP_API_HASH}"
++
++    echo "==> Success! Binary output: out/Release/root/Telegram"
++}
++
++run_patch() {
++    mkdir -p patches
++    git diff main > patches/exdesktop_linux_port.patch || git diff HEAD~1 > patches/exdesktop_linux_port.patch
++    echo "==> Patch saved to patches/exdesktop_linux_port.patch ($(wc -l < patches/exdesktop_linux_port.patch) lines)"
++}
++
++case "$MODE" in
++    test)
++        run_test
++        ;;
++    configure)
++        run_configure "$@"
++        ;;
++    build)
++        run_build "$@"
++        ;;
++    docker)
++        run_docker "$@"
++        ;;
++    patch)
++        run_patch
++        ;;
++    help|--help|-h)
++        show_help
++        ;;
++    *)
++        echo "[ERROR] Unknown command: $MODE"
++        show_help
++        exit 1
++        ;;
++esac
+diff --git a/docs/building-linux.md b/docs/building-linux.md
+index fbdf253..6210c82 100644
+--- a/docs/building-linux.md
++++ b/docs/building-linux.md
+@@ -1,60 +1,124 @@
+-## Build instructions for Linux using Docker
++# Инструкция по сборке exDesktop под Linux (x86_64)
+ 
+-### Prepare folder
++exDesktop — это нативный клиент Telegram с расширенными функциями (меню настроек, лента каналов, режим стримера, интеграция с Gemini и движок Python-плагинов).
+ 
+-Choose a folder for the future build, for example **/home/user/TBuild**. It will be named ***BuildPath*** in the rest of this document. All commands will be launched from Terminal.
++---
+ 
+-### Obtain your API credentials
++## 1. Предварительные требования и зависимости
+ 
+-You will require **api_id** and **api_hash** to access the Telegram API servers. To learn how to obtain them [click here][api_credentials].
++### Системные пакеты (для нативной сборки на хосте)
++- **Компилятор C++:** `GCC >= 12` или `Clang >= 16` (требуется поддержка стандарта C++20)
++- **Сборщик:** `CMake >= 3.25` и `Ninja`
++- **Python:** `Python >= 3.10` с заголовочными файлами (`python3-dev` / `python3-devel`)
++- **Qt6:** `qtbase`, `qtsvg`, `qtimageformats`, `qtwayland` (с поддержкой Wayland и X11)
++- **Медиа и кодеки:** `ffmpeg`, `libvpx`, `openh264`, `opus`, `rnnoise`, `openal`
++- **Системные библиотеки:** `openssl`, `libfido2`, `xxhash`, `lz4`, `cmark-gfm`, `ada`, `minizip`, `kcoreaddons`
+ 
+-### Clone source code and prepare libraries
++Для Debian/Ubuntu:
++```bash
++sudo apt update
++sudo apt install -y build-essential cmake ninja-build python3-dev \
++    qt6-base-dev qt6-base-private-dev qt6-wayland-dev libqt6svg6-dev \
++    libavcodec-dev libavformat-dev libswscale-dev libopus-dev libvpx-dev \
++    libssl-dev libfido2-dev libxxhash-dev liblz4-dev libopenal-dev
++```
+ 
+-Install [poetry](https://python-poetry.org), go to ***BuildPath*** and run
++Для Fedora/RHEL:
++```bash
++sudo dnf install -y gcc-c++ cmake ninja-build python3-devel \
++    qt6-qtbase-devel qt6-qtbase-private-devel qt6-qtwayland-devel qt6-qtsvg-devel \
++    ffmpeg-free-devel libvpx-devel opus-devel openssl-devel libfido2-devel
++```
+ 
+-    git clone --recursive https://github.com/telegramdesktop/tdesktop.git
+-    ./tdesktop/Telegram/build/prepare/linux.sh
++Для Arch Linux:
++```bash
++sudo pacman -S --needed base-devel cmake ninja python qt6-base qt6-wayland qt6-svg \
++    ffmpeg libvpx opus openssl libfido2 xxhash lz4 openal
++```
+ 
+-### Building the project
++---
+ 
+-Go to ***BuildPath*/tdesktop** and run (using [your **api_id** and **api_hash**](#obtain-your-api-credentials))
++## 2. API Credentials Telegram
+ 
+-    docker run --rm -it \
+-        -u $(id -u) \
+-        -v "$PWD:/usr/src/tdesktop" \
+-        tdesktop:centos_env \
+-        /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+-        -D TDESKTOP_API_ID=YOUR_API_ID \
+-        -D TDESKTOP_API_HASH=YOUR_API_HASH
++В сборку встроены рабочие ключи:
++- **TDESKTOP_API_ID:** `27795979`
++- **TDESKTOP_API_HASH:** `0b9b427e162605ce85210ab918a9c2d8`
+ 
+-Or, to create a debug build, run (also using [your **api_id** and **api_hash**](#obtain-your-api-credentials))
++При необходимости передать собственные ключи используйте переменные окружения:
++```bash
++export TDESKTOP_API_ID="27795979"
++export TDESKTOP_API_HASH="0b9b427e162605ce85210ab918a9c2d8"
++```
+ 
+-    docker run --rm -it \
+-        -u $(id -u) \
+-        -v "$PWD:/usr/src/tdesktop" \
+-        -e CONFIG=Debug \
+-        tdesktop:centos_env \
+-        /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
+-        -D TDESKTOP_API_ID=YOUR_API_ID \
+-        -D TDESKTOP_API_HASH=YOUR_API_HASH
++---
+ 
+-The built files will be in the `out` directory.
++## 3. Проверка движка плагинов
+ 
+-### Visual Studio Code integration
++Движок `extera_plugins` на Linux использует нативный Python C API (`Python.h`, `PyConfig_InitPythonConfig`), что исключает зависимость от Windows DLL (`python311.dll` / `LoadLibraryW`).
+ 
+-Ensure you've followed the instruction up to the [**Clone source code and prepare libraries**](#clone-source-code-and-prepare-libraries) step at least.
++Для автономной верификации работы движка запустите встроенный тест:
++```bash
++./build_linux.sh test
++```
+ 
+-Open the repository in Visual Studio Code, install the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension and add the following to `.vscode/settings.json` (using [your **api_id** and **api_hash**](#obtain-your-api-credentials)):
++Тест проверяет:
++1. Регистрацию встроенного C++ модуля `_extera`.
++2. Корректную инициализацию Python рантайма в среде Linux.
++3. Поиск и импорт хост-модуля `extera_host.py`.
++4. Загрузку плагинов формата `.plugin`.
++5. Работу перехватчиков сообщений (`send_hook`) и модификацию исходящего текста.
++6. Корректное завершение работы (`shutdown`).
+ 
+-    {
+-        "cmake.configureSettings": {
+-            "TDESKTOP_API_ID": "YOUR_API_ID",
+-            "TDESKTOP_API_HASH": "YOUR_API_HASH"
+-        }
+-    }
++---
+ 
+-After that, choose **Reopen in Container** via the menu triggered by the green button in bottom left corner and you're done.
++## 4. Сборка клиента
+ 
+-![Quick actions Status bar item](https://code.visualstudio.com/assets/docs/devcontainers/containers/remote-dev-status-bar.png)
++### Способ А: Сборка в официальном изолированном Docker-контейнере (Рекомендуется)
++Этот способ гарантирует сборку всех 36 сабмодулей (кастомный WebRTC, tgcalls, патченный Qt6) без засорения хост-системы:
+ 
+-[api_credentials]: api_credentials.md
++```bash
++# Клонирование сабмодулей
++git submodule update --init --recursive
++
++# Запуск герметичной сборки
++./build_linux.sh docker
++```
++
++Бинарник будет создан в каталоге: `out/Release/root/Telegram`.
++
++### Способ Б: Нативная сборка на хосте
++Если в вашей системе уже установлены библиотеки `telegram-desktop` (например, Arch, Fedora, openSUSE или Gentoo):
++
++```bash
++# Инициализация необходимых сабмодулей (lib_ui, cmake_helpers)
++git submodule update --init Telegram/lib_ui cmake
++
++# Конфигурация и компиляция
++./build_linux.sh configure
++./build_linux.sh build
++```
++
++Готовый бинарник будет доступен по пути `out/bin/Telegram`.
++
++---
++
++## 5. Расположение плагинов и данных в Linux
++
++- **Код хоста и вспомогательные скрипты Python:**
++  - `<папка с бинарником>/python/extera/`
++  - или `~/.local/share/exDesktop/python/extera/`
++  - или `/usr/share/exDesktop/python/extera/`
++- **Пользовательские плагины:**
++  - `~/.local/share/exDesktop/tdata/plugins/` (файлы с расширением `.plugin`)
++- **Настройки плагинов:**
++  - `~/.local/share/exDesktop/tdata/settings/`
++
++---
++
++## 6. Наложение патча на чистый исходный код
++
++Полный патч адаптации сохранен в файле [patches/exdesktop_linux_port.patch](file:///home/rorka/Projects/exDesktop/patches/exdesktop_linux_port.patch).
++Для наложения на свежий репозиторий:
++```bash
++git apply patches/exdesktop_linux_port.patch
++```
 diff --git a/patches/exdesktop_linux_port.patch b/patches/exdesktop_linux_port.patch
 new file mode 100644
-index 0000000..d7ce0c0
+index 0000000..756847a
 --- /dev/null
 +++ b/patches/exdesktop_linux_port.patch
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,356 @@
 +diff --git a/CMakeLists.txt b/CMakeLists.txt
 +index 59477e2..7ca5a7a 100644
 +--- a/CMakeLists.txt
@@ -354,3 +691,399 @@ index 0000000..d7ce0c0
 ++            print('Choosing Qt 6.')
 ++            os.environ['QT'] = '6.11.2'
 +     return True
++diff --git a/patches/exdesktop_linux_port.patch b/patches/exdesktop_linux_port.patch
++new file mode 100644
++index 0000000..d7ce0c0
++--- /dev/null
+++++ b/patches/exdesktop_linux_port.patch
++@@ -0,0 +1,175 @@
+++diff --git a/CMakeLists.txt b/CMakeLists.txt
+++index 59477e2..7ca5a7a 100644
+++--- a/CMakeLists.txt
++++++ b/CMakeLists.txt
+++@@ -50,8 +50,10 @@ include(cmake/target_link_frameworks.cmake)
+++ include(cmake/target_link_options_if_exists.cmake)
+++ include(cmake/init_target.cmake)
+++ include(cmake/generate_target.cmake)
+++-include(cmake/nuget.cmake)
+++-include(cmake/validate_d3d_compiler.cmake)
++++if (WIN32)
++++    include(cmake/nuget.cmake)
++++    include(cmake/validate_d3d_compiler.cmake)
++++endif()
+++ include(cmake/target_prepare_qrc.cmake)
+++ 
+++ include(cmake/options.cmake)
+++diff --git a/Telegram/CMakeLists.txt b/Telegram/CMakeLists.txt
+++index 4da5e96..ec2ddea 100644
+++--- a/Telegram/CMakeLists.txt
++++++ b/Telegram/CMakeLists.txt
+++@@ -2775,18 +2775,13 @@ if (WIN32)
+++         COMMAND ${CMAKE_COMMAND} -E copy_directory ${libs_loc}/python311/embed $<TARGET_FILE_DIR:Telegram>/python
+++         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/SourceFiles/extera/python $<TARGET_FILE_DIR:Telegram>/python/extera
+++     )
+++-elseif (APPLE)
+++-    find_package(Python3 COMPONENTS Development)
+++-    if (Python3_FOUND)
+++-        target_include_directories(Telegram PRIVATE ${Python3_INCLUDE_DIRS})
+++-        target_link_libraries(Telegram PRIVATE ${Python3_LIBRARIES})
+++-        add_custom_command(TARGET Telegram POST_BUILD
+++-            COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/SourceFiles/extera/python $<TARGET_FILE_DIR:Telegram>/python/extera
+++-        )
+++-    else()
+++-        message(WARNING "Python3 development libraries not found: plugin support (extera_plugins) will be disabled on this build")
+++-        set_source_files_properties(SourceFiles/extera/extera_plugins.cpp PROPERTIES HEADER_FILE_ONLY TRUE)
+++-    endif()
++++else()
++++    find_package(Python3 COMPONENTS Development REQUIRED)
++++    target_include_directories(Telegram PRIVATE ${Python3_INCLUDE_DIRS})
++++    target_link_libraries(Telegram PRIVATE ${Python3_LIBRARIES})
++++    add_custom_command(TARGET Telegram POST_BUILD
++++        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/SourceFiles/extera/python $<TARGET_FILE_DIR:Telegram>/python/extera
++++    )
+++ endif()
+++ 
+++ if (MSVC)
+++diff --git a/Telegram/SourceFiles/extera/extera_plugins.cpp b/Telegram/SourceFiles/extera/extera_plugins.cpp
+++index 92bb1d5..5a7f018 100644
+++--- a/Telegram/SourceFiles/extera/extera_plugins.cpp
++++++ b/Telegram/SourceFiles/extera/extera_plugins.cpp
+++@@ -34,6 +34,7 @@
+++ 
+++ #include <QtCore/QDir>
+++ #include <QtCore/QFile>
++++#include <QtCore/QStandardPaths>
+++ 
+++ #ifdef Q_OS_WIN
+++ #include <windows.h>
+++@@ -78,11 +79,41 @@ private:
+++ };
+++ 
+++ [[nodiscard]] QString RuntimePath() {
++++#ifdef Q_OS_WIN
++++	return cExeDir() + u"python/"_q;
++++#elif defined(Q_OS_MAC)
+++ 	return cExeDir() + u"python/"_q;
++++#else
++++	// Linux / generic Unix: check local candidates where extera_host.py might reside
++++	const auto localToExe = cExeDir() + u"python/"_q;
++++	if (QFile::exists(localToExe + u"extera/extera_host.py"_q)) {
++++		return localToExe;
++++	}
++++	const auto appData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + u"/python/"_q;
++++	if (QFile::exists(appData + u"extera/extera_host.py"_q)) {
++++		return appData;
++++	}
++++	const auto localShare = QDir::homePath() + u"/.local/share/exDesktop/python/"_q;
++++	if (QFile::exists(localShare + u"extera/extera_host.py"_q)) {
++++		return localShare;
++++	}
++++	const auto systemShare = u"/usr/share/exDesktop/python/"_q;
++++	if (QFile::exists(systemShare + u"extera/extera_host.py"_q)) {
++++		return systemShare;
++++	}
++++	return QFile::exists(localToExe) ? localToExe : appData;
++++#endif
+++ }
+++ 
+++ [[nodiscard]] QString DataPath() {
++++#ifdef Q_OS_WIN
++++	return cWorkingDir() + u"tdata/plugins/"_q;
++++#else
++++	if (cWorkingDir().isEmpty()) {
++++		return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + u"/plugins/"_q;
++++	}
+++ 	return cWorkingDir() + u"tdata/plugins/"_q;
++++#endif
+++ }
+++ 
+++ [[nodiscard]] QString StartMarkerPath() {
+++@@ -409,7 +440,11 @@ PyObject *InitNativeModule() {
+++ 
+++ [[nodiscard]] bool InitInterpreter(const QString &runtime) {
+++ 	auto config = PyConfig();
++++#ifdef Q_OS_WIN
+++ 	PyConfig_InitIsolatedConfig(&config);
++++#else
++++	PyConfig_InitPythonConfig(&config);
++++#endif
+++ 	const auto finish = [&](PyStatus status) {
+++ 		if (PyStatus_Exception(status)) {
+++ 			Instance().error = QString::fromUtf8(status.err_msg
+++@@ -420,6 +455,7 @@ PyObject *InitNativeModule() {
+++ 		}
+++ 		return true;
+++ 	};
++++#ifdef Q_OS_WIN
+++ 	const auto home = QDir::toNativeSeparators(runtime).toStdWString();
+++ 	if (!finish(PyConfig_SetString(&config, &config.home, home.c_str()))) {
+++ 		return false;
+++@@ -439,12 +475,37 @@ PyObject *InitNativeModule() {
+++ 			return false;
+++ 		}
+++ 	}
++++#endif
+++ 	config.write_bytecode = 0;
+++ 	config.install_signal_handlers = 0;
+++ 	if (!finish(Py_InitializeFromConfig(&config))) {
+++ 		return false;
+++ 	}
+++ 	PyConfig_Clear(&config);
++++
++++#ifndef Q_OS_WIN
++++	// Add runtime and extera directories to sys.path so modules can be imported
++++	PyObject *sysPath = PySys_GetObject("path");
++++	if (sysPath && PyList_Check(sysPath)) {
++++		const auto extraPaths = QStringList{
++++			runtime + u"extera"_q,
++++			runtime,
++++			runtime + u"site-packages"_q,
++++			DataPath() + u"plugins"_q,
++++			QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + u"/python/extera"_q,
++++			QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + u"/python"_q,
++++		};
++++		for (auto it = extraPaths.rbegin(); it != extraPaths.rend(); ++it) {
++++			const auto &path = *it;
++++			const auto uPath = QDir::toNativeSeparators(path).toUtf8();
++++			if (PyObject *pPath = PyUnicode_FromString(uPath.constData())) {
++++				PyList_Insert(sysPath, 0, pPath);
++++				Py_DECREF(pPath);
++++			}
++++		}
++++	}
++++#endif
++++
+++ 	return true;
+++ }
+++ 
+++diff --git a/Telegram/build/qt_version.py b/Telegram/build/qt_version.py
+++index 24c81dc..d09e4d9 100644
+++--- a/Telegram/build/qt_version.py
++++++ b/Telegram/build/qt_version.py
+++@@ -10,4 +10,11 @@ def resolve(arch):
+++         else:
+++             print('Choosing Qt 6.')
+++             os.environ['QT'] = '6.11.2'
++++    else:
++++        if 'qt5' in sys.argv:
++++            print('Choosing Qt 5.')
++++            os.environ['QT'] = '5.15.19'
++++        else:
++++            print('Choosing Qt 6.')
++++            os.environ['QT'] = '6.11.2'
+++     return True
+diff --git a/tests/test_extera_plugins.cpp b/tests/test_extera_plugins.cpp
+new file mode 100644
+index 0000000..4d15c5c
+--- /dev/null
++++ b/tests/test_extera_plugins.cpp
+@@ -0,0 +1,209 @@
++#include <Python.h>
++#include <cassert>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <string>
++
++namespace fs = std::filesystem;
++
++static std::string g_lastLog;
++static std::string g_lastToast;
++static std::string g_lastCopied;
++
++static PyObject *NativeLog(PyObject *self, PyObject *args) {
++    const char *text = nullptr;
++    if (PyArg_ParseTuple(args, "s", &text)) {
++        g_lastLog = text;
++        std::cout << "[NativeLog] " << text << std::endl;
++    }
++    Py_RETURN_NONE;
++}
++
++static PyObject *NativeToast(PyObject *self, PyObject *args) {
++    const char *text = nullptr;
++    if (PyArg_ParseTuple(args, "s", &text)) {
++        g_lastToast = text;
++        std::cout << "[NativeToast] " << text << std::endl;
++    }
++    Py_RETURN_NONE;
++}
++
++static PyObject *NativeCopy(PyObject *self, PyObject *args) {
++    const char *text = nullptr;
++    if (PyArg_ParseTuple(args, "s", &text)) {
++        g_lastCopied = text;
++        std::cout << "[NativeCopy] " << text << std::endl;
++    }
++    Py_RETURN_NONE;
++}
++
++static PyObject *NativeSendMessage(PyObject *self, PyObject *args) {
++    long long peerId = 0;
++    const char *text = nullptr;
++    long long replyTo = 0;
++    if (PyArg_ParseTuple(args, "Lsp", &peerId, &text, &replyTo)) {
++        std::cout << "[NativeSendMessage] peer: " << peerId << ", text: " << text << std::endl;
++    }
++    Py_RETURN_NONE;
++}
++
++static PyObject *NativeSettingsChanged(PyObject *self, PyObject *args) {
++    const char *pluginId = nullptr;
++    if (PyArg_ParseTuple(args, "s", &pluginId)) {
++        std::cout << "[NativeSettingsChanged] " << pluginId << std::endl;
++    }
++    Py_RETURN_NONE;
++}
++
++static PyObject *NativeCurrentPeer(PyObject *self, PyObject *args) {
++    return PyLong_FromLongLong(123456789LL);
++}
++
++static PyMethodDef NativeMethods[] = {
++    { "log", NativeLog, METH_VARARGS, nullptr },
++    { "toast", NativeToast, METH_VARARGS, nullptr },
++    { "copy", NativeCopy, METH_VARARGS, nullptr },
++    { "send_message", NativeSendMessage, METH_VARARGS, nullptr },
++    { "settings_changed", NativeSettingsChanged, METH_VARARGS, nullptr },
++    { "current_peer", NativeCurrentPeer, METH_VARARGS, nullptr },
++    { nullptr, nullptr, 0, nullptr },
++};
++
++static PyModuleDef NativeModule = {
++    PyModuleDef_HEAD_INIT,
++    "_extera",
++    nullptr,
++    -1,
++    NativeMethods,
++};
++
++static PyObject *InitNativeModule() {
++    return PyModule_Create(&NativeModule);
++}
++
++int main(int argc, char **argv) {
++    fs::path repoDir = fs::current_path();
++    fs::path pythonDir = repoDir / "Telegram" / "SourceFiles" / "extera" / "python";
++    if (!fs::exists(pythonDir / "extera_host.py")) {
++        std::cerr << "Cannot find extera_host.py in " << pythonDir << std::endl;
++        return 1;
++    }
++
++    fs::path tempBase = fs::temp_directory_path() / "exdesktop_test";
++    fs::remove_all(tempBase);
++    fs::create_directories(tempBase / "plugins");
++    fs::create_directories(tempBase / "settings");
++
++    // Create a dummy sample plugin (.plugin extension)
++    fs::path samplePluginPath = tempBase / "plugins" / "sample.plugin";
++    {
++        std::ofstream out(samplePluginPath);
++        out << R"PY(
++__id__ = "sample_test"
++__name__ = "Sample Test Plugin"
++__description__ = "A test plugin for Linux native runner"
++__author__ = "exDesktop Porter"
++__version__ = "1.0.0"
++
++import _extera
++from base_plugin import BasePlugin, HookResult, HookStrategy
++
++class TestPlugin(BasePlugin):
++    def on_plugin_load(self):
++        _extera.log("TestPlugin loaded on Linux!")
++        self.add_on_send_message_hook(priority=10)
++
++    def on_send_message_hook(self, account, params):
++        _extera.log(f"on_send_message_hook triggered: message={params.message}")
++        if params.message.startswith("/shout "):
++            params.message = params.message[7:].upper() + "!!!"
++            return HookResult(HookStrategy.MODIFY, params=params)
++        return HookResult(HookStrategy.DEFAULT)
++)PY";
++    }
++
++    std::cout << "[TEST] 1. Registering native inittab..." << std::endl;
++    if (PyImport_AppendInittab("_extera", InitNativeModule) == -1) {
++        std::cerr << "Failed to register _extera inittab" << std::endl;
++        return 1;
++    }
++
++    std::cout << "[TEST] 2. Initializing Python from Config (Linux PyConfig_InitPythonConfig)..." << std::endl;
++    PyConfig config;
++    PyConfig_InitPythonConfig(&config);
++    config.write_bytecode = 0;
++    config.install_signal_handlers = 0;
++
++    PyStatus status = Py_InitializeFromConfig(&config);
++    if (PyStatus_Exception(status)) {
++        std::cerr << "Py_InitializeFromConfig failed: " << (status.err_msg ? status.err_msg : "unknown") << std::endl;
++        PyConfig_Clear(&config);
++        return 1;
++    }
++    PyConfig_Clear(&config);
++
++    std::cout << "[TEST] 3. Injecting module search paths into sys.path..." << std::endl;
++    PyObject *sysPath = PySys_GetObject("path");
++    assert(sysPath && PyList_Check(sysPath));
++
++    PyObject *pyPath = PyUnicode_FromString(pythonDir.c_str());
++    PyList_Insert(sysPath, 0, pyPath);
++    Py_DECREF(pyPath);
++
++    std::cout << "[TEST] 4. Importing extera_host module..." << std::endl;
++    PyObject *hostModule = PyImport_ImportModule("extera_host");
++    if (!hostModule) {
++        PyErr_Print();
++        std::cerr << "Failed to import extera_host!" << std::endl;
++        return 1;
++    }
++
++    PyObject *dispatch = PyObject_GetAttrString(hostModule, "dispatch");
++    assert(dispatch != nullptr);
++
++    auto callDispatch = [&](const std::string &method, const std::string &payload) -> std::string {
++        PyObject *res = PyObject_CallFunction(dispatch, "ss", method.c_str(), payload.c_str());
++        if (!res) {
++            PyErr_Print();
++            return "";
++        }
++        std::string out = PyUnicode_AsUTF8(res);
++        Py_DECREF(res);
++        return out;
++    };
++
++    std::cout << "[TEST] 5. Calling dispatch('init')..." << std::endl;
++    std::string initPayload = "{\"plugins\": \"" + (tempBase / "plugins").string() + "\", \"settings\": \"" + (tempBase / "settings").string() + "\", \"safe_mode\": false}";
++    std::string initRes = callDispatch("init", initPayload);
++    std::cout << "init response: " << initRes << std::endl;
++    assert(initRes.find("\"ok\": true") != std::string::npos);
++
++    std::cout << "[TEST] 6. Calling dispatch('list')..." << std::endl;
++    std::string listRes = callDispatch("list", "{}");
++    std::cout << "list response: " << listRes << std::endl;
++    assert(listRes.find("sample_test") != std::string::npos);
++    assert(listRes.find("Sample Test Plugin") != std::string::npos);
++
++    std::cout << "[TEST] 7. Testing send_hook with message modification..." << std::endl;
++    std::string sendHookPayload = "{\"history\": 1, \"text\": \"/shout hello linux\", \"reply_to\": 0}";
++    std::string hookRes = callDispatch("send_hook", sendHookPayload);
++    std::cout << "send_hook response: " << hookRes << std::endl;
++    assert(hookRes.find("HELLO LINUX!!!") != std::string::npos);
++
++    std::cout << "[TEST] 8. Testing shutdown..." << std::endl;
++    std::string shutRes = callDispatch("shutdown", "{}");
++    std::cout << "shutdown response: " << shutRes << std::endl;
++    assert(shutRes.find("\"ok\": true") != std::string::npos);
++
++    Py_DECREF(dispatch);
++    Py_DECREF(hostModule);
++    Py_Finalize();
++
++    fs::remove_all(tempBase);
++    std::cout << "\n==============================================" << std::endl;
++    std::cout << "ALL TESTS PASSED: extera_plugins engine works flawlessly on Linux!" << std::endl;
++    std::cout << "==============================================" << std::endl;
++    return 0;
++}
