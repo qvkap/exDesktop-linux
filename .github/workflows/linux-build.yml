@@ -86,7 +86,8 @@ jobs:
       - name: Cache Docker layers
         uses: actions/cache@v4
         with:
-          path: /tmp/.buildx-cache
+          path: |
+            /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ hashFiles('Telegram/build/docker/centos_env/**') }}
           restore-keys: |
             ${{ runner.os }}-buildx-
@@ -99,14 +100,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ccache-
 
-      - name: Prepare Docker Build Environment
+      - name: Generate Dockerfile
         run: |
           python3 -m pip install jinja2
           cd Telegram/build/docker/centos_env
-          python3 gen_dockerfile.py | DOCKER_BUILDKIT=1 docker build \
-            --cache-from=type=local,src=/tmp/.buildx-cache \
-            --cache-to=type=local,dest=/tmp/.buildx-cache-new,mode=max \
-            -t tdesktop:centos_env -
+          python3 gen_dockerfile.py > Dockerfile
+
+      - name: Build and Cache Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: Telegram/build/docker/centos_env
+          load: true
+          tags: tdesktop:centos_env
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
 
       - name: Update Docker cache
         run: |
