@@ -25,7 +25,7 @@ You will require **api_id** and **api_hash** to access the Telegram API servers.
 
 `prepare.py` expects the repository folder to be called `tdesktop`, so either clone into that name or add a symlink. Go to ***BuildPath*** and run
 
-    git clone --recursive https://github.com/metawka/exDesktop.git
+    git clone --recursive https://github.com/qvkap/exDesktop-linux.git
     ln -s exDesktop tdesktop
     ./tdesktop/Telegram/build/prepare/mac.sh silent
 

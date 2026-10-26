@@ -64,7 +64,7 @@ void Check(Fn<void(CheckResult)> done = nullptr) {
 		state.manager = new QNetworkAccessManager(qApp);
 	}
 	auto request = QNetworkRequest(QUrl(
-		u"https://api.github.com/repos/metawka/exDesktop/releases/latest"_q));
+		u"https://api.github.com/repos/qvkap/exDesktop-linux/releases/latest"_q));
 	request.setRawHeader("Accept", "application/vnd.github+json");
 	request.setRawHeader("User-Agent", "exDesktop");
 	const auto reply = state.manager->get(request);
@@ -100,15 +100,7 @@ void Check(Fn<void(CheckResult)> done = nullptr) {
 } // namespace
 
 void Start() {
-	auto &state = Instance();
-	if (state.timer) {
-		return;
-	}
-	state.timer = std::make_unique<base::Timer>([] {
-		Check();
-		Instance().timer->callOnce(kCheckInterval);
-	});
-	state.timer->callOnce(kFirstCheckDelay);
+	// Automatic update prompts disabled per user request
 }
 
 void CheckNow(Fn<void(CheckResult)> done) {
@@ -126,7 +118,7 @@ QString AvailableVersion() {
 void OpenRelease() {
 	const auto &url = Instance().url;
 	UrlClickHandler::Open(url.isEmpty()
-		? u"https://github.com/metawka/exteraDesktop/releases/latest"_q
+		? u"https://github.com/qvkap/exDesktop-linux/releases/latest"_q
 		: url);
 }
 

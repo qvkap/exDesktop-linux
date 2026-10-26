@@ -1755,8 +1755,8 @@ void BuildOther(SectionBuilder &builder) {
 			builder,
 			u"port_developer"_q,
 			tr::lng_extera_port_developer(),
-			u"@metawka"_q,
-			u"https://t.me/metawka"_q,
+			u"@qvkap"_q,
+			u"https://t.me/qvkap"_q,
 			{ &st::exteraIconDeveloper });
 		AddLink(
 			builder,
@@ -1952,8 +1952,8 @@ void BuildMain(SectionBuilder &builder) {
 			builder,
 			u"website"_q,
 			tr::lng_extera_website(),
-			u"exteradesktop.xyz"_q,
-			u"https://exteradesktop.xyz"_q,
+			u"github.com/qvkap/exDesktop-linux"_q,
+			u"https://github.com/qvkap/exDesktop-linux"_q,
 			{ &st::exteraIconWebsite });
 	});
 }

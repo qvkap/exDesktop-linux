@@ -1,4 +1,4 @@
-[![exDesktop: put a star on GitHub](docs/banner.png)](https://github.com/metawka/exDesktop/stargazers)
+[![exDesktop: put a star on GitHub](docs/banner.png)](https://github.com/qvkap/exDesktop-linux/stargazers)
 
 <img src="docs/logo.png" width="150" align="left"/>
 
@@ -9,7 +9,7 @@ An unofficial Windows client built from the official [Telegram Desktop](https://
 
 [![Channel](https://img.shields.io/badge/Channel-Telegram-blue.svg)](https://t.me/exDesktop)
 [![Website](https://img.shields.io/badge/Website-exteradesktop.xyz-blue.svg)](https://exteradesktop.xyz)
-[![Developer](https://img.shields.io/badge/Developer-@metawka-blue.svg)](https://t.me/metawka)
+[![Developer](https://img.shields.io/badge/Developer-@qvkap-blue.svg)](https://t.me/qvkap)
 
 ![exDesktop settings](docs/screenshots/main.png)
 
@@ -26,7 +26,7 @@ An unofficial Windows client built from the official [Telegram Desktop](https://
 ![Plugin manager](docs/screenshots/plugins.png)
 
 ## Downloads
-Get the installer or portable archive from the [releases page](https://github.com/metawka/exDesktop/releases). Both packages include the `python` folder needed by plugins. The client installs beside Telegram Desktop and keeps its data separate.
+Get the installer or portable archive from the [releases page](https://github.com/qvkap/exDesktop-linux/releases). Both packages include the `python` folder needed by plugins. The client installs beside Telegram Desktop and keeps its data separate.
 
 ## API credentials
 Get your own API ID and hash from [Telegram's API credentials page](https://core.telegram.org/api/obtaining_api_id). Pass them to the configure script when generating the project files:

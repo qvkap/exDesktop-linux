@@ -166,14 +166,20 @@ void ShowToast(const QString &text) {
 		int64 dialogId) {
 	const auto owner = &session->data();
 	if (dialogId > 0) {
-		return owner->peerLoaded(peerFromUser(UserId(dialogId)));
+		if (const auto user = owner->peerLoaded(peerFromUser(UserId(dialogId)))) {
+			return user;
+		}
+		return owner->peer(peerFromUser(UserId(dialogId)));
 	} else if (dialogId < 0) {
 		const auto bare = BareId(-dialogId);
 		if (const auto channel = owner->peerLoaded(
 				peerFromChannel(ChannelId(bare)))) {
 			return channel;
 		}
-		return owner->peerLoaded(peerFromChat(ChatId(bare)));
+		if (const auto chat = owner->peerLoaded(peerFromChat(ChatId(bare)))) {
+			return chat;
+		}
+		return owner->peer(peerFromChannel(ChannelId(bare)));
 	}
 	return nullptr;
 }
@@ -226,7 +232,9 @@ void SendFromPlugin(
 		return;
 	}
 	const auto session = &controller->session();
-	const auto peer = ResolveDialog(session, dialogId);
+	const auto peer = (dialogId != 0)
+		? ResolveDialog(session, dialogId)
+		: (controller->activeChatCurrent().peer());
 	if (!peer) {
 		ShowToast(tr::lng_extera_plugins_no_chat(tr::now));
 		return;
@@ -410,6 +418,11 @@ PyObject *NativeSettingsChanged(PyObject *self, PyObject *args) {
 }
 
 PyObject *NativeCurrentPeer(PyObject *self, PyObject *args) {
+	if (const auto controller = ActiveController()) {
+		if (const auto peer = controller->activeChatCurrent().peer()) {
+			return PyLong_FromLongLong(DialogId(peer));
+		}
+	}
 	return PyLong_FromLongLong(CurrentDialog.load());
 }
 
@@ -722,7 +735,9 @@ rpl::producer<QString> settingsChanges() {
 }
 
 void notifyListChanged() {
-	Instance().listChanges.fire({});
+	crl::on_main([] {
+		Instance().listChanges.fire({});
+	});
 }
 
 } // namespace Extera::Plugins

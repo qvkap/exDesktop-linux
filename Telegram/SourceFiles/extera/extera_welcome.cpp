@@ -72,14 +72,14 @@ void FillUnofficialInfo(not_null<Ui::VerticalLayout*> container) {
 	AddLinkButton(
 		container,
 		tr::lng_extera_welcome_site(),
-		u"exteradesktop.xyz"_q,
-		u"https://exteradesktop.xyz"_q,
+		u"github.com/qvkap/exDesktop-linux"_q,
+		u"https://github.com/qvkap/exDesktop-linux"_q,
 		&st::exteraIconWebsite);
 	AddLinkButton(
 		container,
 		tr::lng_extera_welcome_dev(),
-		u"@metawka"_q,
-		u"https://t.me/metawka"_q,
+		u"@qvkap"_q,
+		u"https://t.me/qvkap"_q,
 		&st::exteraIconDeveloper);
 	AddLinkButton(
 		container,
