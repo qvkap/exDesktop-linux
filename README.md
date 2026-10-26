@@ -1,5 +1,3 @@
-[![exDesktop: put a star on GitHub](docs/banner.png)](https://github.com/qvkap/exDesktop-linux/stargazers)
-
 <img src="docs/logo.png" width="150" align="left"/>
 
 ## exDesktop
