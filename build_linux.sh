@@ -108,7 +108,9 @@ run_docker() {
     fi
 
     echo "==> Running build in container with API ID: ${TDESKTOP_API_ID}..."
-    ${DOCKER_CLI} run --rm -it \
+    local DOCKER_TTY=""
+    [ -t 0 ] && DOCKER_TTY="-it"
+    ${DOCKER_CLI} run --rm ${DOCKER_TTY} \
         -u "$(id -u):$(id -g)" \
         -v "$PWD:/usr/src/tdesktop" \
         -e CONFIG="${CONFIG}" \
